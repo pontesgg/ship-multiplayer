@@ -8,23 +8,374 @@
     <script src="https://cdn.pubnub.com/sdk/javascript/pubnub.7.2.2.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
     <style>
-        * { touch-action: manipulation; user-select: none; }
+        * { touch-action: manipulation; user-select: none; box-sizing: border-box; }
         body { font-family: 'Share Tech Mono', monospace; background-color: #030814; color: #00f0ff; }
         .font-orbitron { font-family: 'Orbitron', sans-serif; }
         .radar-grid { 
             background-image: linear-gradient(rgba(0, 240, 255, 0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 240, 255, 0.08) 1px, transparent 1px); 
-            background-size: 5% 5%; 
+            background-size: 20px 20px; 
         }
     </style>
 </head>
 <body class="h-screen w-screen flex flex-col justify-between items-center p-2 radar-grid overflow-hidden">
 
     <!-- Top Status Bar -->
-    <header class="w-full max-w-md flex justify-between items-center px-3 py-1 bg-slate-900/90 border border-cyan-500/30 rounded-lg text-xs">
+    <header class="w-full max-w-md flex justify-between items-center px-3 py-2 bg-slate-900/90 border border-cyan-500/30 rounded-lg text-xs z-10">
         <div>SALA: <span id="display-room" class="text-yellow-400 font-bold">---</span></div>
         <div class="text-center font-orbitron text-cyan-400 font-bold">NAVAL ARENA</div>
         <div>NAVIOS: <span id="display-count" class="text-green-400 font-bold">0/5</span></div>
     </header>
 
-    <!-- Main Container: Game Canvas & Overlays -->
-    <div class="relative w-
+    <!-- Container do Jogo (Canvas + Modais) -->
+    <div class="relative w-full max-w-md aspect-square flex items-center justify-center my-auto">
+        
+        <!-- Canvas principal -->
+        <canvas id="gameCanvas" class="w-full h-full border-2 border-cyan-500/50 rounded-lg bg-slate-950 shadow-lg shadow-cyan-500/10"></canvas>
+
+        <!-- 1. Modal Inicial (Lobby) -->
+        <div id="lobby-modal" class="absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center p-4 rounded-lg border border-cyan-500/40 z-30">
+            <h2 class="text-xl font-bold font-orbitron text-cyan-400 mb-1">COMBATE NAVAL</h2>
+            <p class="text-slate-400 text-xs mb-4 text-center">Digite seu nome e o código da sala para iniciar.</p>
+            
+            <div class="w-full space-y-3 px-4">
+                <div>
+                    <label class="text-xs text-cyan-500">SEU NOME / PATENTE:</label>
+                    <input type="text" id="player-name" maxlength="10" placeholder="Ex: CMG_MAGNO" class="w-full bg-slate-900 border border-cyan-500/50 rounded px-3 py-2 text-cyan-300 text-sm focus:outline-none focus:border-cyan-400 uppercase">
+                </div>
+                <div>
+                    <label class="text-xs text-cyan-500">CÓDIGO DA SALA:</label>
+                    <input type="text" id="room-code" maxlength="8" value="MARINHA1" class="w-full bg-slate-900 border border-cyan-500/50 rounded px-3 py-2 text-yellow-400 font-bold text-sm focus:outline-none focus:border-cyan-400 uppercase">
+                </div>
+                
+                <button onclick="enterLobby()" class="w-full py-3 bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold font-orbitron rounded text-sm tracking-wider shadow-lg transition-all active:scale-95">
+                    ENTRAR NA SALA DE ESPERA
+                </button>
+            </div>
+        </div>
+
+        <!-- 2. Modal Sala de Espera -->
+        <div id="waiting-modal" class="hidden absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center p-4 rounded-lg border border-yellow-500/40 z-30">
+            <h3 class="text-lg font-bold font-orbitron text-yellow-400 mb-1">SALA DE ESPERA</h3>
+            <p id="waiting-status" class="text-xs text-cyan-400 mb-3 text-center animate-pulse">Aguardando participantes...</p>
+            
+            <div id="player-list" class="w-full max-w-xs space-y-1.5 mb-4 text-xs font-mono max-h-48 overflow-y-auto">
+                <!-- Jogadores entram aqui dinamicamente -->
+            </div>
+
+            <button id="start-btn" onclick="triggerStart()" class="hidden w-full max-w-xs py-3 bg-green-500 hover:bg-green-400 text-slate-950 font-bold font-orbitron rounded text-sm tracking-wider transition-all shadow-lg shadow-green-500/30 active:scale-95">
+                INICIAR BATALHA
+            </button>
+            
+            <div id="non-host-msg" class="hidden text-xs text-yellow-400 font-orbitron text-center">
+                AGUARDANDO O HOST INICIAR A PARTIDA...
+            </div>
+        </div>
+
+        <!-- 3. Contagem Regressiva -->
+        <div id="countdown-overlay" class="hidden absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center rounded-lg z-20">
+            <div id="countdown-number" class="text-7xl font-extrabold font-orbitron text-cyan-400 animate-bounce">3</div>
+            <div class="text-sm font-orbitron text-cyan-500 tracking-widest mt-2">PREPARAR PARA O COMBATE!</div>
+        </div>
+    </div>
+
+    <!-- D-Pad Controls -->
+    <footer class="w-full max-w-md pb-2 z-10">
+        <div class="grid grid-cols-3 gap-1.5 w-44 mx-auto">
+            <div></div>
+            <button onclick="changeDir('UP')" class="bg-slate-900/90 border border-cyan-500/40 py-3 rounded text-center text-cyan-400 text-lg active:bg-cyan-500/30 font-bold">▲</button>
+            <div></div>
+            <button onclick="changeDir('LEFT')" class="bg-slate-900/90 border border-cyan-500/40 py-3 rounded text-center text-cyan-400 text-lg active:bg-cyan-500/30 font-bold">◄</button>
+            <button onclick="changeDir('DOWN')" class="bg-slate-900/90 border border-cyan-500/40 py-3 rounded text-center text-cyan-400 text-lg active:bg-cyan-500/30 font-bold">▼</button>
+            <button onclick="changeDir('RIGHT')" class="bg-slate-900/90 border border-cyan-500/40 py-3 rounded text-center text-cyan-400 text-lg active:bg-cyan-500/30 font-bold">►</button>
+        </div>
+    </footer>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const GRID_UNITS = 20;
+        
+        let pubnub = null;
+        let myId = 'p_' + Math.random().toString(36).substr(2, 6);
+        let myName = '';
+        let roomCode = '';
+        let myColor = '#00f0ff';
+        let isHost = false;
+
+        let navio = { x: 5, y: 5, dx: 1, dy: 0, body: [], score: 0, alive: true };
+        let roomPlayers = {};
+        let crate = { x: 10, y: 10 };
+        let gameLoop = null;
+
+        const COLORS = ['#00f0ff', '#ff007f', '#ffe600', '#00ff66', '#ff6600'];
+
+        function initScreen() {
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width || 350;
+            canvas.height = rect.height || 350;
+            drawGrid();
+        }
+
+        function drawGrid() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const size = canvas.width / GRID_UNITS;
+            ctx.strokeStyle = 'rgba(0, 240, 255, 0.05)';
+            for (let i = 0; i <= GRID_UNITS; i++) {
+                ctx.beginPath();
+                ctx.moveTo(i * size, 0); ctx.lineTo(i * size, canvas.height);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(0, i * size); ctx.lineTo(canvas.width, i * size);
+                ctx.stroke();
+            }
+        }
+
+        function enterLobby() {
+            myName = document.getElementById('player-name').value.trim() || 'CMD_' + myId.substr(0,3);
+            roomCode = document.getElementById('room-code').value.trim().toUpperCase() || 'MARINHA1';
+            myColor = COLORS[Math.floor(Math.random() * COLORS.length)];
+
+            document.getElementById('display-room').innerText = roomCode;
+            document.getElementById('lobby-modal').classList.add('hidden');
+            document.getElementById('waiting-modal').classList.remove('hidden');
+
+            pubnub = new PubNub({
+                publishKey: 'pub-c-4fa2e5bb-76f2-4663-8a3d-a5170d4949bd',
+                subscribeKey: 'sub-c-1349fbc0-4e11-47ef-a031-64539659b8d9',
+                userId: myId
+            });
+
+            pubnub.subscribe({ channels: ['naval_' + roomCode] });
+
+            pubnub.addListener({
+                message: (m) => {
+                    const data = m.message;
+                    if (data.type === 'JOIN' || data.type === 'HEARTBEAT') {
+                        roomPlayers[m.publisher] = data.player;
+                        checkHostStatus();
+                        updateWaitingRoom();
+                    } else if (data.type === 'START_SIGNAL') {
+                        startCountdown();
+                    } else if (data.type === 'POS_UPDATE') {
+                        if (m.publisher !== myId) {
+                            roomPlayers[m.publisher] = data.player;
+                        }
+                    }
+                }
+            });
+
+            roomPlayers[myId] = { id: myId, name: myName, color: myColor, score: 0, joinedAt: Date.now() };
+            sendPresence();
+            
+            setInterval(() => {
+                if (!document.getElementById('waiting-modal').classList.contains('hidden')) {
+                    sendPresence();
+                }
+            }, 2000);
+
+            document.addEventListener('keydown', handleKey);
+        }
+
+        function sendPresence() {
+            sendMsg({ 
+                type: 'JOIN', 
+                player: { id: myId, name: myName, color: myColor, score: 0, joinedAt: roomPlayers[myId]?.joinedAt || Date.now() } 
+            });
+        }
+
+        function checkHostStatus() {
+            const sorted = Object.values(roomPlayers).sort((a, b) => a.joinedAt - b.joinedAt);
+            if (sorted.length > 0 && sorted[0].id === myId) {
+                isHost = true;
+                document.getElementById('start-btn').classList.remove('hidden');
+                document.getElementById('non-host-msg').classList.add('hidden');
+            } else {
+                isHost = false;
+                document.getElementById('start-btn').classList.add('hidden');
+                document.getElementById('non-host-msg').classList.remove('hidden');
+            }
+        }
+
+        function updateWaitingRoom() {
+            const list = document.getElementById('player-list');
+            const playersArr = Object.values(roomPlayers).sort((a, b) => a.joinedAt - b.joinedAt);
+            document.getElementById('display-count').innerText = `${playersArr.length}/5`;
+            
+            list.innerHTML = playersArr.map((p, idx) => `
+                <div class="flex justify-between items-center bg-slate-900 px-3 py-2 rounded border border-slate-800">
+                    <div class="flex items-center space-x-2">
+                        <span style="color:${p.color}">⚓ ${p.name}</span>
+                        ${idx === 0 ? '<span class="text-[10px] bg-yellow-500/20 text-yellow-400 px-1 rounded border border-yellow-500/40">HOST</span>' : ''}
+                    </div>
+                    <span class="text-green-400 text-xs">NO RADAR</span>
+                </div>
+            `).join('');
+        }
+
+        function triggerStart() {
+            if (isHost) sendMsg({ type: 'START_SIGNAL' });
+        }
+
+        function startCountdown() {
+            document.getElementById('waiting-modal').classList.add('hidden');
+            const overlay = document.getElementById('countdown-overlay');
+            const num = document.getElementById('countdown-number');
+            overlay.classList.remove('hidden');
+
+            let count = 3;
+            num.innerText = count;
+
+            const timer = setInterval(() => {
+                count--;
+                if (count > 0) {
+                    num.innerText = count;
+                } else if (count === 0) {
+                    num.innerText = 'FOGO!';
+                } else {
+                    clearInterval(timer);
+                    overlay.classList.add('hidden');
+                    runGame();
+                }
+            }, 1000);
+        }
+
+        function runGame() {
+            const pKeys = Object.keys(roomPlayers).sort();
+            const myIndex = pKeys.indexOf(myId) >= 0 ? pKeys.indexOf(myId) : 0;
+            navio.x = (myIndex * 4 + 2) % GRID_UNITS;
+            navio.y = (myIndex * 4 + 2) % GRID_UNITS;
+            navio.body = [{ x: navio.x, y: navio.y }];
+
+            gameLoop = setInterval(update, 120);
+        }
+
+        function sendMsg(msg) {
+            if (pubnub) pubnub.publish({ channel: 'naval_' + roomCode, message: msg });
+        }
+
+        function handleKey(e) {
+            if (e.key === 'ArrowUp' || e.key === 'w') changeDir('UP');
+            if (e.key === 'ArrowDown' || e.key === 's') changeDir('DOWN');
+            if (e.key === 'ArrowLeft' || e.key === 'a') changeDir('LEFT');
+            if (e.key === 'ArrowRight' || e.key === 'd') changeDir('RIGHT');
+        }
+
+        function changeDir(dir) {
+            if (dir === 'UP' && navio.dy === 0) { navio.dx = 0; navio.dy = -1; }
+            if (dir === 'DOWN' && navio.dy === 0) { navio.dx = 0; navio.dy = 1; }
+            if (dir === 'LEFT' && navio.dx === 0) { navio.dx = -1; navio.dy = 0; }
+            if (dir === 'RIGHT' && navio.dx === 0) { navio.dx = 1; navio.dy = 0; }
+        }
+
+        function update() {
+            if (!navio.alive) return;
+
+            navio.x += navio.dx;
+            navio.y += navio.dy;
+
+            if (navio.x < 0) navio.x = GRID_UNITS - 1;
+            if (navio.x >= GRID_UNITS) navio.x = 0;
+            if (navio.y < 0) navio.y = GRID_UNITS - 1;
+            if (navio.y >= GRID_UNITS) navio.y = 0;
+
+            navio.body.unshift({ x: navio.x, y: navio.y });
+
+            if (navio.x === crate.x && navio.y === crate.y) {
+                navio.score += 50;
+                crate.x = Math.floor(Math.random() * GRID_UNITS);
+                crate.y = Math.floor(Math.random() * GRID_UNITS);
+            } else {
+                if (navio.body.length > 3 + Math.floor(navio.score / 50)) {
+                    navio.body.pop();
+                }
+            }
+
+            Object.entries(roomPlayers).forEach(([pid, p]) => {
+                if (pid !== myId && p.body) {
+                    p.body.forEach(seg => {
+                        if (navio.x === seg.x && navio.y === seg.y) {
+                            navio.alive = false;
+                        }
+                    });
+                }
+            });
+
+            sendMsg({
+                type: 'POS_UPDATE',
+                player: {
+                    x: navio.x, y: navio.y, dx: navio.dx, dy: navio.dy,
+                    body: navio.body, name: myName, score: navio.score,
+                    color: myColor, alive: navio.alive
+                }
+            });
+
+            draw();
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawGrid();
+            const cellSize = canvas.width / GRID_UNITS;
+
+            // Suprimento
+            ctx.fillStyle = '#ffe600';
+            ctx.fillRect(crate.x * cellSize + 2, crate.y * cellSize + 2, cellSize - 4, cellSize - 4);
+
+            // Outros Navios
+            Object.values(roomPlayers).forEach(p => {
+                if (p.body && p.alive !== false) {
+                    drawTrail(p.body, p.color, cellSize);
+                    drawHead(p.x, p.y, p.dx, p.dy, p.color, p.name, cellSize);
+                }
+            });
+
+            // Meu Navio
+            if (navio.alive) {
+                drawTrail(navio.body, myColor, cellSize);
+                drawHead(navio.x, navio.y, navio.dx, navio.dy, myColor, myName, cellSize);
+            }
+        }
+
+        function drawTrail(body, color, size) {
+            ctx.fillStyle = color;
+            ctx.globalAlpha = 0.35;
+            body.slice(1).forEach(seg => {
+                ctx.beginPath();
+                ctx.arc(seg.x * size + size/2, seg.y * size + size/2, size/3, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.globalAlpha = 1.0;
+        }
+
+        function drawHead(x, y, dx, dy, color, name, size) {
+            ctx.save();
+            ctx.translate(x * size + size/2, y * size + size/2);
+
+            let angle = 0;
+            if (dx === 1) angle = 0;
+            if (dx === -1) angle = Math.PI;
+            if (dy === 1) angle = Math.PI / 2;
+            if (dy === -1) angle = -Math.PI / 2;
+            ctx.rotate(angle);
+
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(size/2 - 2, 0);
+            ctx.lineTo(-size/3, -size/3);
+            ctx.lineTo(-size/3, size/3);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.restore();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '10px Share Tech Mono';
+            ctx.textAlign = 'center';
+            ctx.fillText(name, x * size + size/2, y * size - 3);
+        }
+
+        window.onload = initScreen;
+        window.onresize = initScreen;
+    </script>
+</body>
+</html>
