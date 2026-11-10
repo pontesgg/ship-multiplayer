@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Naval Arena - Combat Multiplayer</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.pubnub.com/sdk/javascript/pubnub.7.2.2.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
     <style>
         * { touch-action: manipulation; user-select: none; box-sizing: border-box; }
@@ -52,7 +52,7 @@
                 </div>
                 
                 <button onclick="enterLobby()" class="w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold font-orbitron rounded text-xs tracking-wider shadow-lg transition-all active:scale-95">
-                    ENTRAR E CARREGAR DADOS
+                    ENTRAR NA ARENA
                 </button>
             </div>
         </div>
@@ -61,7 +61,7 @@
         <div id="waiting-modal" class="hidden absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-between p-4 rounded-lg border border-yellow-500/40 z-30">
             <div class="w-full text-center">
                 <h3 class="text-lg font-bold font-orbitron text-yellow-400 mb-0.5">SALA DE ESPERA</h3>
-                <p id="waiting-status" class="text-[11px] text-cyan-400 animate-pulse">Aguardando participantes...</p>
+                <p id="waiting-status" class="text-[11px] text-cyan-400 animate-pulse">Sincronizando com os outros comandantes...</p>
             </div>
 
             <!-- Painel de Histórico Pessoal -->
@@ -119,8 +119,11 @@
         const ctx = canvas.getContext('2d');
         const GRID_UNITS = 20;
         
-        let pubnub = null;
-        let myId = 'p_' + Math.random().toString(36).substr(2, 6);
+        let peer = null;
+        let connections = [];
+        let broadcastChannel = null;
+        
+        let myId = '';
         let userNip = '';
         let myName = '';
         let roomCode = '';
@@ -134,7 +137,6 @@
         let gameLoop = null;
 
         let userStats = { highScore: 0, kills: {}, totalKills: 0 };
-
         const COLORS = ['#00f0ff', '#ff007f', '#ffe600', '#00ff66', '#ff6600'];
 
         function initScreen() {
@@ -198,6 +200,7 @@
             myName = document.getElementById('player-name').value.trim() || 'CMD_' + userNip.substr(0,4);
             roomCode = document.getElementById('room-code').value.trim().toUpperCase() || 'MARINHA1';
             myColor = COLORS[Math.floor(Math.random() * COLORS.length)];
+            myId = 'naval_' + roomCode + '_' + userNip;
             joinedAt = Date.now();
 
             loadUserHistory(userNip);
@@ -206,51 +209,80 @@
             document.getElementById('lobby-modal').classList.add('hidden');
             document.getElementById('waiting-modal').classList.remove('hidden');
 
-            pubnub = new PubNub({
-                publishKey: 'pub-c-4fa2e5bb-76f2-4663-8a3d-a5170d4949bd',
-                subscribeKey: 'sub-c-1349fbc0-4e11-47ef-a031-64539659b8d9',
-                userId: myId
+            setupNetwork();
+            document.addEventListener('keydown', handleKey);
+        }
+
+        function setupNetwork() {
+            // Canal local imediato (para navegadores na mesma rede ou abas)
+            broadcastChannel = new BroadcastChannel('channel_' + roomCode);
+            broadcastChannel.onmessage = (e) => handleNetworkMessage(e.data);
+
+            // Conexão PeerJS (P2P Direto)
+            peer = new Peer(myId, { debug: 1 });
+
+            peer.on('open', (id) => {
+                roomPlayers[myId] = { id: myId, name: myName, color: myColor, score: 0, joinedAt: joinedAt };
+                broadcastMsg({ type: 'ANNOUNCE', player: roomPlayers[myId] });
+                checkHostStatus();
+                updateWaitingRoom();
             });
 
-            pubnub.subscribe({ channels: ['naval_' + roomCode] });
+            peer.on('connection', (conn) => {
+                connections.push(conn);
+                conn.on('data', (data) => handleNetworkMessage(data));
+            });
 
-            pubnub.addListener({
-                message: (m) => {
-                    const data = m.message;
-                    if (data.type === 'ANNOUNCE' || data.type === 'HEARTBEAT') {
-                        roomPlayers[m.publisher] = data.player;
-                        // Responder de volta se alguém anunciou entrada
-                        if (data.type === 'ANNOUNCE' && m.publisher !== myId) {
-                            sendPresence('HEARTBEAT');
-                        }
-                        checkHostStatus();
-                        updateWaitingRoom();
-                    } else if (data.type === 'START_SIGNAL') {
-                        startCountdown();
-                    } else if (data.type === 'POS_UPDATE') {
-                        if (m.publisher !== myId) {
-                            roomPlayers[m.publisher] = data.player;
-                        }
-                    } else if (data.type === 'PLAYER_KILLED') {
-                        if (data.killerId === myId) {
-                            registerKill(data.victimName);
-                        }
+            // Conectar aos outros 4 slots possíveis da sala baseados no NIP
+            for (let i = 1; i <= 5; i++) {
+                const targetId = 'naval_' + roomCode + '_slot' + i;
+                if (targetId !== myId) {
+                    const conn = peer.connect(targetId);
+                    if (conn) {
+                        conn.on('open', () => {
+                            connections.push(conn);
+                            conn.send({ type: 'ANNOUNCE', player: roomPlayers[myId] });
+                        });
+                        conn.on('data', (data) => handleNetworkMessage(data));
                     }
                 }
-            });
+            }
 
-            roomPlayers[myId] = { id: myId, name: myName, color: myColor, score: 0, joinedAt: joinedAt };
-            sendPresence('ANNOUNCE');
-            checkHostStatus();
-            updateWaitingRoom();
-
+            // Loop de atualização da sala de espera
             setInterval(() => {
                 if (!document.getElementById('waiting-modal').classList.contains('hidden')) {
-                    sendPresence('HEARTBEAT');
+                    broadcastMsg({ type: 'HEARTBEAT', player: roomPlayers[myId] });
                 }
-            }, 1500);
+            }, 1000);
+        }
 
-            document.addEventListener('keydown', handleKey);
+        function broadcastMsg(msg) {
+            if (broadcastChannel) broadcastChannel.postMessage(msg);
+            connections.forEach(conn => {
+                if (conn.open) conn.send(msg);
+            });
+        }
+
+        function handleNetworkMessage(data) {
+            if (!data || !data.type) return;
+
+            if (data.type === 'ANNOUNCE' || data.type === 'HEARTBEAT') {
+                if (data.player && data.player.id) {
+                    roomPlayers[data.player.id] = data.player;
+                    checkHostStatus();
+                    updateWaitingRoom();
+                }
+            } else if (data.type === 'START_SIGNAL') {
+                startCountdown();
+            } else if (data.type === 'POS_UPDATE') {
+                if (data.player && data.player.id !== myId) {
+                    roomPlayers[data.player.id] = data.player;
+                }
+            } else if (data.type === 'PLAYER_KILLED') {
+                if (data.killerId === myId) {
+                    registerKill(data.victimName);
+                }
+            }
         }
 
         function registerKill(victimName) {
@@ -259,13 +291,6 @@
             navio.score += 100;
             saveUserHistory();
             loadUserHistory(userNip);
-        }
-
-        function sendPresence(msgType = 'HEARTBEAT') {
-            sendMsg({ 
-                type: msgType, 
-                player: { id: myId, name: myName, color: myColor, score: 0, joinedAt: joinedAt } 
-            });
         }
 
         function checkHostStatus() {
@@ -285,6 +310,8 @@
             const list = document.getElementById('player-list');
             const playersArr = Object.values(roomPlayers).sort((a, b) => a.joinedAt - b.joinedAt);
             
+            document.getElementById('waiting-status').innerText = `${playersArr.length} Comandante(s) no Radar`;
+            
             list.innerHTML = playersArr.map((p, idx) => `
                 <div class="flex justify-between items-center bg-slate-900 px-3 py-1.5 rounded border border-slate-800">
                     <div class="flex items-center space-x-2">
@@ -297,7 +324,8 @@
         }
 
         function triggerStart() {
-            if (isHost) sendMsg({ type: 'START_SIGNAL' });
+            broadcastMsg({ type: 'START_SIGNAL' });
+            startCountdown();
         }
 
         function startCountdown() {
@@ -332,11 +360,8 @@
             navio.score = 0;
             navio.alive = true;
 
+            if (gameLoop) clearInterval(gameLoop);
             gameLoop = setInterval(update, 120);
-        }
-
-        function sendMsg(msg) {
-            if (pubnub) pubnub.publish({ channel: 'naval_' + roomCode, message: msg });
         }
 
         function handleKey(e) {
@@ -388,15 +413,16 @@
                     p.body.forEach(seg => {
                         if (navio.x === seg.x && navio.y === seg.y) {
                             navio.alive = false;
-                            sendMsg({ type: 'PLAYER_KILLED', killerId: pid, victimName: myName });
+                            broadcastMsg({ type: 'PLAYER_KILLED', killerId: pid, victimName: myName });
                         }
                     });
                 }
             });
 
-            sendMsg({
+            broadcastMsg({
                 type: 'POS_UPDATE',
                 player: {
+                    id: myId,
                     x: navio.x, y: navio.y, dx: navio.dx, dy: navio.dy,
                     body: navio.body, name: myName, score: navio.score,
                     color: myColor, alive: navio.alive
