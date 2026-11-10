@@ -32,15 +32,15 @@
         <!-- Canvas principal -->
         <canvas id="gameCanvas" class="w-full h-full border-2 border-cyan-500/50 rounded-lg bg-slate-950 shadow-lg shadow-cyan-500/10"></canvas>
 
-        <!-- 1. Modal Inicial (Login por E-mail) -->
+        <!-- 1. Modal Inicial (Login por NIP de 8 dígitos) -->
         <div id="lobby-modal" class="absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center p-4 rounded-lg border border-cyan-500/40 z-30">
             <h2 class="text-xl font-bold font-orbitron text-cyan-400 mb-1">COMBATE NAVAL</h2>
-            <p class="text-slate-400 text-xs mb-3 text-center">Informe seu e-mail para carregar seu histórico de combate.</p>
+            <p class="text-slate-400 text-xs mb-3 text-center">Informe seu NIP para carregar seu histórico de combate.</p>
             
             <div class="w-full space-y-2.5 px-4">
                 <div>
-                    <label class="text-[10px] text-cyan-500 font-bold">E-MAIL DO JOGADOR:</label>
-                    <input type="email" id="player-email" placeholder="comandante@marinha.mil.br" class="w-full bg-slate-900 border border-cyan-500/50 rounded px-3 py-1.5 text-cyan-300 text-xs focus:outline-none focus:border-cyan-400">
+                    <label class="text-[10px] text-cyan-500 font-bold">NIP DO JOGADOR (8 DÍGITOS):</label>
+                    <input type="text" id="player-nip" maxlength="8" pattern="\d{8}" inputmode="numeric" placeholder="12345678" class="w-full bg-slate-900 border border-cyan-500/50 rounded px-3 py-1.5 text-cyan-300 text-xs focus:outline-none focus:border-cyan-400 font-bold tracking-widest">
                 </div>
                 <div>
                     <label class="text-[10px] text-cyan-500 font-bold">NOME / PATENTE:</label>
@@ -57,7 +57,7 @@
             </div>
         </div>
 
-        <!-- 2. Modal Sala de Espera com Histórico do Jogador -->
+        <!-- 2. Modal Sala de Espera com Histórico do NIP -->
         <div id="waiting-modal" class="hidden absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-between p-4 rounded-lg border border-yellow-500/40 z-30">
             <div class="w-full text-center">
                 <h3 class="text-lg font-bold font-orbitron text-yellow-400 mb-0.5">SALA DE ESPERA</h3>
@@ -65,25 +65,25 @@
             </div>
 
             <!-- Painel de Histórico Pessoal -->
-            <div class="w-full bg-slate-900/90 border border-cyan-500/30 rounded p-2.5 my-2 text-xs space-y-1">
-                <div class="text-[10px] font-orbitron text-cyan-400 border-b border-cyan-500/20 pb-1">HISTÓRICO DE COMBATE (<span id="user-display-email" class="text-yellow-400"></span>)</div>
+            <div class="w-full bg-slate-900/90 border border-cyan-500/30 rounded p-2 my-1 text-xs space-y-1">
+                <div class="text-[10px] font-orbitron text-cyan-400 border-b border-cyan-500/20 pb-1">HISTÓRICO DE COMBATE (NIP: <span id="user-display-nip" class="text-yellow-400"></span>)</div>
                 <div class="flex justify-between text-slate-300">
                     <span>RECORDE PESSOAL:</span>
                     <span id="stat-highscore" class="text-green-400 font-bold">0 pts</span>
                 </div>
                 <div class="flex justify-between text-slate-300">
-                    <span>MAIOR VÍTIMA (MAIS DERRUBADO):</span>
+                    <span>MAIOR VÍTIMA:</span>
                     <span id="stat-top-victim" class="text-red-400 font-bold">Nenhum</span>
                 </div>
                 <div class="flex justify-between text-slate-300">
-                    <span>TOTAL DE NAVIOS DERRUBADOS:</span>
+                    <span>TOTAL DERRUBADOS:</span>
                     <span id="stat-total-kills" class="text-cyan-300 font-bold">0</span>
                 </div>
             </div>
 
             <!-- Lista de Jogadores na Sala -->
             <div id="player-list" class="w-full space-y-1 text-xs font-mono max-h-32 overflow-y-auto">
-                <!-- Jogadores entram aqui -->
+                <!-- Jogadores entram aqui dinamicamente -->
             </div>
 
             <button id="start-btn" onclick="triggerStart()" class="hidden w-full py-2.5 bg-green-500 hover:bg-green-400 text-slate-950 font-bold font-orbitron rounded text-xs tracking-wider transition-all shadow-lg active:scale-95">
@@ -121,11 +121,12 @@
         
         let pubnub = null;
         let myId = 'p_' + Math.random().toString(36).substr(2, 6);
-        let userEmail = '';
+        let userNip = '';
         let myName = '';
         let roomCode = '';
         let myColor = '#00f0ff';
         let isHost = false;
+        let joinedAt = Date.now();
 
         let navio = { x: 5, y: 5, dx: 1, dy: 0, body: [], score: 0, alive: true };
         let roomPlayers = {};
@@ -157,8 +158,8 @@
             }
         }
 
-        function loadUserHistory(email) {
-            const key = 'naval_stats_' + btoa(email.toLowerCase());
+        function loadUserHistory(nip) {
+            const key = 'naval_stats_nip_' + nip;
             const saved = localStorage.getItem(key);
             if (saved) {
                 userStats = JSON.parse(saved);
@@ -166,14 +167,13 @@
                 userStats = { highScore: 0, kills: {}, totalKills: 0 };
             }
 
-            document.getElementById('user-display-email').innerText = email;
+            document.getElementById('user-display-nip').innerText = nip;
             document.getElementById('stat-highscore').innerText = userStats.highScore + ' pts';
             document.getElementById('stat-total-kills').innerText = userStats.totalKills;
 
-            // Calcular maior vítima
             let topVictim = 'Nenhum';
             let maxKills = 0;
-            Object.entries(userStats.kills).forEach(([victimName, count]) => {
+            Object.entries(userStats.kills || {}).forEach(([victimName, count]) => {
                 if (count > maxKills) {
                     maxKills = count;
                     topVictim = `${victimName} (${count}x)`;
@@ -183,23 +183,24 @@
         }
 
         function saveUserHistory() {
-            if (!userEmail) return;
-            const key = 'naval_stats_' + btoa(userEmail.toLowerCase());
+            if (!userNip) return;
+            const key = 'naval_stats_nip_' + userNip;
             localStorage.setItem(key, JSON.stringify(userStats));
         }
 
         function enterLobby() {
-            userEmail = document.getElementById('player-email').value.trim().toLowerCase();
-            if (!userEmail || !userEmail.includes('@')) {
-                alert('Por favor, informe um e-mail válido para carregar seu histórico.');
+            userNip = document.getElementById('player-nip').value.trim();
+            if (!/^\d{8}$/.test(userNip)) {
+                alert('Por favor, informe um NIP válido contendo exatamente 8 números.');
                 return;
             }
 
-            myName = document.getElementById('player-name').value.trim() || 'CMD_' + myId.substr(0,3);
+            myName = document.getElementById('player-name').value.trim() || 'CMD_' + userNip.substr(0,4);
             roomCode = document.getElementById('room-code').value.trim().toUpperCase() || 'MARINHA1';
             myColor = COLORS[Math.floor(Math.random() * COLORS.length)];
+            joinedAt = Date.now();
 
-            loadUserHistory(userEmail);
+            loadUserHistory(userNip);
 
             document.getElementById('display-room').innerText = roomCode;
             document.getElementById('lobby-modal').classList.add('hidden');
@@ -216,8 +217,12 @@
             pubnub.addListener({
                 message: (m) => {
                     const data = m.message;
-                    if (data.type === 'JOIN' || data.type === 'HEARTBEAT') {
+                    if (data.type === 'ANNOUNCE' || data.type === 'HEARTBEAT') {
                         roomPlayers[m.publisher] = data.player;
+                        // Responder de volta se alguém anunciou entrada
+                        if (data.type === 'ANNOUNCE' && m.publisher !== myId) {
+                            sendPresence('HEARTBEAT');
+                        }
                         checkHostStatus();
                         updateWaitingRoom();
                     } else if (data.type === 'START_SIGNAL') {
@@ -234,14 +239,16 @@
                 }
             });
 
-            roomPlayers[myId] = { id: myId, name: myName, color: myColor, score: 0, joinedAt: Date.now() };
-            sendPresence();
-            
+            roomPlayers[myId] = { id: myId, name: myName, color: myColor, score: 0, joinedAt: joinedAt };
+            sendPresence('ANNOUNCE');
+            checkHostStatus();
+            updateWaitingRoom();
+
             setInterval(() => {
                 if (!document.getElementById('waiting-modal').classList.contains('hidden')) {
-                    sendPresence();
+                    sendPresence('HEARTBEAT');
                 }
-            }, 2000);
+            }, 1500);
 
             document.addEventListener('keydown', handleKey);
         }
@@ -251,13 +258,13 @@
             userStats.kills[victimName] = (userStats.kills[victimName] || 0) + 1;
             navio.score += 100;
             saveUserHistory();
-            loadUserHistory(userEmail);
+            loadUserHistory(userNip);
         }
 
-        function sendPresence() {
+        function sendPresence(msgType = 'HEARTBEAT') {
             sendMsg({ 
-                type: 'JOIN', 
-                player: { id: myId, name: myName, color: myColor, score: 0, joinedAt: roomPlayers[myId]?.joinedAt || Date.now() } 
+                type: msgType, 
+                player: { id: myId, name: myName, color: myColor, score: 0, joinedAt: joinedAt } 
             });
         }
 
@@ -284,7 +291,7 @@
                         <span style="color:${p.color}">⚓ ${p.name}</span>
                         ${idx === 0 ? '<span class="text-[9px] bg-yellow-500/20 text-yellow-400 px-1 rounded border border-yellow-500/40">HOST</span>' : ''}
                     </div>
-                    <span class="text-green-400 text-[10px]">PRONTO</span>
+                    <span class="text-green-400 text-[10px]">CONECTADO</span>
                 </div>
             `).join('');
         }
@@ -371,13 +378,11 @@
 
             document.getElementById('display-score').innerText = navio.score;
 
-            // Atualizar Recorde Pessoal
             if (navio.score > userStats.highScore) {
                 userStats.highScore = navio.score;
                 saveUserHistory();
             }
 
-            // Colisão com rastro PvP
             Object.entries(roomPlayers).forEach(([pid, p]) => {
                 if (pid !== myId && p.body) {
                     p.body.forEach(seg => {
