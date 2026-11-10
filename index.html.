@@ -1,0 +1,101 @@
+// server.js
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: "*" } });
+
+const GRID_SIZE = 30;
+let players = {};
+let food = { x: 15, y: 15 };
+
+function generateFood() {
+    return {
+        x: Math.floor(Math.random() * GRID_SIZE),
+        y: Math.floor(Math.random() * GRID_SIZE)
+    };
+}
+
+io.on('connection', (socket) => {
+    console.log('Jogador conectado:', socket.id);
+
+    // Novo jogador
+    players[socket.id] = {
+        id: socket.id,
+        x: Math.floor(Math.random() * GRID_SIZE),
+        y: Math.floor(Math.random() * GRID_SIZE),
+        dx: 1,
+        dy: 0,
+        body: [],
+        score: 0,
+        color: `hsl(${Math.floor(Math.random() * 360)}, 100%, 50%)`,
+        name: `Jogador ${Object.keys(players).length + 1}`
+    };
+
+    socket.emit('init', { id: socket.id, food, gridSize: GRID_SIZE });
+
+    socket.on('direction', (dir) => {
+        const p = players[socket.id];
+        if (!p) return;
+        if (dir === 'UP' && p.dy === 0) { p.dx = 0; p.dy = -1; }
+        if (dir === 'DOWN' && p.dy === 0) { p.dx = 0; p.dy = 1; }
+        if (dir === 'LEFT' && p.dx === 0) { p.dx = -1; p.dy = 0; }
+        if (dir === 'RIGHT' && p.dx === 0) { p.dx = 1; p.dy = 0; }
+    });
+
+    socket.on('disconnect', () => {
+        delete players[socket.id];
+    });
+});
+
+// Loop principal do jogo a 10 FPS (100ms)
+setInterval(() => {
+    Object.keys(players).forEach(id => {
+        const p = players[id];
+        
+        // Mover cabeça
+        p.x += p.dx;
+        p.y += p.dy;
+
+        // Teleporte pelas paredes (Wrap around)
+        if (p.x < 0) p.x = GRID_SIZE - 1;
+        if (p.x >= GRID_SIZE) p.x = 0;
+        if (p.y < 0) p.y = GRID_SIZE - 1;
+        if (p.y >= GRID_SIZE) p.y = 0;
+
+        // Adicionar cabeça ao corpo
+        p.body.unshift({ x: p.x, y: p.y });
+
+        // Verificar comida
+        if (p.x === food.x && p.y === food.y) {
+            p.score += 10;
+            food = generateFood();
+            io.emit('foodUpdate', food);
+        } else {
+            p.body.pop();
+        }
+
+        // Colisão com outras cobras (PvP)
+        Object.keys(players).forEach(otherId => {
+            if (id !== otherId) {
+                const other = players[otherId];
+                other.body.forEach(segment => {
+                    if (p.x === segment.x && p.y === segment.y) {
+                        // Morreu: reseta jogador
+                        p.score = 0;
+                        p.x = Math.floor(Math.random() * GRID_SIZE);
+                        p.y = Math.floor(Math.random() * GRID_SIZE);
+                        p.body = [];
+                        other.score += 100; // Bônus para quem matou
+                    }
+                });
+            }
+        });
+    });
+
+    io.emit('gameState', players);
+}, 100);
+
+server.listen(3000, () => console.log('Servidor rodando na porta 3000'));
